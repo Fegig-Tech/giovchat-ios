@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos:
+    name: macOS and iOS Simulator
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Test on macOS
+        run: swift test
+      - name: Build for the iOS Simulator (warnings are errors)
+        run: >-
+          xcodebuild build
+          -scheme GiovChat-Package
+          -destination 'generic/platform=iOS Simulator'
+          SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+          GCC_TREAT_WARNINGS_AS_ERRORS=YES
+      - name: Test on an iOS Simulator
+        run: |
+          device=$(xcrun simctl list devices available | grep -E '^[[:space:]]+iPhone' | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' | head -n 1 || true)
+          if [ -z "$device" ]; then
+            echo "No iPhone simulator is available" >&2
+            exit 1
+          fi
+          echo "Testing on simulator $device"
+          xcodebuild test -scheme GiovChat-Package -destination "id=$device"
+
+  linux:
+    name: Linux (Swift 6.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Test (warnings are errors)
+        run: swift test -Xswiftc -warnings-as-errors

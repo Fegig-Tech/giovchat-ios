@@ -1,0 +1,8 @@
+# Swift Package Index (https://swiftpackageindex.com). The index builds the package for every platform on its own
+# (here iOS and macOS, from Package.swift); this file only says which targets get hosted documentation and which
+# platform the documentation is built for.
+version: 1
+builder:
+  configs:
+    - platform: ios
+      documentation_targets: [GiovChat, GiovChatCore]

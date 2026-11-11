@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Check version and changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches GiovChatVersion.current and CHANGELOG.md has its section
+        id: version
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+            echo "::error::Tag $VERSION is not a plain semantic version (for example 1.2.3 or 1.2.3-beta.1)"
+            exit 1
+          fi
+          CURRENT=$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' Sources/GiovChatCore/GiovChatVersion.swift)
+          if [ "$CURRENT" != "$VERSION" ]; then
+            echo "::error file=Sources/GiovChatCore/GiovChatVersion.swift::GiovChatVersion.current is '$CURRENT' but the tag is '$VERSION'"
+            exit 1
+          fi
+          ESCAPED=$(printf '%s' "$VERSION" | sed 's/[.+]/[&]/g')
+          if ! grep -qE "^## \[$ESCAPED\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## [$VERSION]' section"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: CI
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: GitHub Release
+    needs: [verify, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json tagName > /dev/null 2>&1; then
+            echo "::notice::The GitHub release $GITHUB_REF_NAME already exists; nothing to do"
+            exit 0
+          fi
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 {on=1; next} /^## \[/ {if (on) exit} on' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error file=CHANGELOG.md::The '## [$VERSION]' section of CHANGELOG.md is empty"
+            exit 1
+          fi
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md --verify-tag $PRERELEASE
