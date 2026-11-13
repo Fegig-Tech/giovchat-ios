@@ -18,14 +18,14 @@ the dashboard settings it relies on are at [giovchat.app/docs](https://giovchat.
 The package is installed with Swift Package Manager from `https://github.com/Fegig-Tech/giovchat-ios`.
 
 - **Xcode:** File > Add Package Dependencies…, paste `https://github.com/Fegig-Tech/giovchat-ios` in the search
-  field, choose the dependency rule (for example **Up to Next Major Version** from `0.1.0`) and click Add Package.
+  field, choose the dependency rule (for example **Up to Next Major Version** from `0.2.0`) and click Add Package.
   Add **GiovChat** to your app target (it brings `GiovChatCore`); choose only **GiovChatCore** if you build your own
   UI.
 - **Package.swift:**
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Fegig-Tech/giovchat-ios", from: "0.1.0"),
+    .package(url: "https://github.com/Fegig-Tech/giovchat-ios", from: "0.2.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: [
@@ -35,8 +35,8 @@ targets: [
 ]
 ```
 
-While the version is 0.x, minor versions may contain breaking changes; `.upToNextMinor(from: "0.1.0")` pins you to
-0.1.x if you prefer to upgrade by hand. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+While the version is 0.x, minor versions may contain breaking changes; `.upToNextMinor(from: "0.2.0")` pins you to
+0.2.x if you prefer to upgrade by hand. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 No `Info.plist` keys are needed: photos are picked with the system photo picker and files with the Files picker,
 which ask for no permission.
@@ -132,6 +132,20 @@ GiovChatView(tenantKey: "...")
 
 Only `http(s)` and `mailto:` links are tappable; anything else stays plain text.
 
+## Build your own UI
+
+`GiovChatController` is the whole session without any UI; draw it yourself and keep the footer with the drop-in
+`GiovBrandingView`. It reads `.giovChatStyle(_:)`, follows the controller's configuration and disappears only when the
+workspace removed the branding (Business and Advanced plans).
+
+```swift
+VStack(spacing: 0) {
+    MyMessages(chat: chat)
+    GiovBrandingView(controller: chat)          // or GiovBrandingView(showBranding: true)
+}
+.giovChatStyle(GiovChatStyle(branding: GiovBrandingStyle(textColor: .gray, backgroundColor: .white)))
+```
+
 ## Session storage
 
 The session token is a bearer secret that proves the device owns the conversation. By default it is kept in the
@@ -169,6 +183,37 @@ GiovChatView(
 sign-in. Never put the identity secret in the app. A `userId` without a matching `userHash` is treated like any other
 untrusted detail. Details you supply also pre-fill the pre-chat form, which asks only for the fields the workspace
 requires and you did not provide (and that are valid).
+
+## Ratings and answer feedback
+
+A teammate (or GiovBot, when it resolves a chat) can ask the visitor to rate the conversation. The chat draws the card
+by itself: five faces (Very bad to Great), an optional comment, then "Thanks" with the chosen face. The visitor may
+change the answer until the card closes (the server decides). GiovBot answers get thumbs up / down under them; a
+thumbs-down asks for an optional short reason. Servers without ratings simply show none of it.
+
+For your own UI, or to react in the app:
+
+```swift
+let chat = GiovChatController(
+    tenantKey: "ws_123",
+    showsRatingCard: false,            // you draw the card yourself (default true)
+    showsAnswerFeedback: true,
+    onRatingRequested: { request in showMyRatingScreen(request) },   // once per request
+    onRatingSubmitted: { result in track(result.score) },
+    onAnswerFeedback: { messageId, vote in track(vote) }              // vote is nil when taken back
+)
+
+let request = chat.pendingRating                         // the open request, or nil
+let result = try await chat.submitRating(score: 5, comment: "Fast!")   // 1...5
+try await chat.submitAnswerFeedback(messageId: id, vote: .down, reason: "Wrong plan")
+chat.presentRating()                                     // open the built-in rating sheet in GiovChatView
+```
+
+`submitRating` shows the answer at once and rolls it back when refused. The thrown `GiovChatError` has a typed
+`ratingFailure` (`.closed`, `.replaced`, `.tooManyChanges`, `.rateLimited(retryAfterSeconds:)`, ...). The card stays
+answerable after the team closed the chat for as long as its window is open: a closed conversation stays on screen
+read-only (`state.conversationClosed`), the composer becomes "Start a new conversation", and
+`startNewConversation()` (or the visitor's next message) clears it.
 
 ## Attachments
 
@@ -244,6 +289,13 @@ The push carries data you can use to open the chat when the visitor taps the not
 
 Handle it in `UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:)` and
 present `GiovChatView` when `type == "giov.message"`. The sample app has the APNs wiring as comments.
+
+## Footer style
+
+The "Powered by GiovChat" footer follows your style but stays on. Set `GiovChatStyle.fontName` and
+`GiovChatStyle.branding` (`GiovBrandingStyle(fontName:textColor:brandColor:backgroundColor:)`): the background must be
+opaque; the text and link colours must be opaque and reach 4.5:1 against it, otherwise the defaults (text #52525B, link
+#7C3AED, white) apply and a warning is printed in debug builds. Size (12 pt), layout and the 44 pt tap height are fixed.
 
 ## Languages and text
 

@@ -25,6 +25,10 @@ public struct GiovChatStyle: Sendable, Equatable {
     public var visitorBubbleColor: Color?
     /// Agent, greeting and typing bubbles.
     public var agentBubbleColor: Color?
+    /// A custom font (PostScript name) for the "Powered by GiovChat" footer; ``GiovBrandingStyle/fontName`` wins.
+    public var fontName: String?
+    /// The footer's look; see ``GiovBrandingStyle``. It cannot hide the footer.
+    public var branding: GiovBrandingStyle?
 
     public init(
         primaryColor: Color? = nil,
@@ -32,7 +36,9 @@ public struct GiovChatStyle: Sendable, Equatable {
         backgroundColor: Color? = nil,
         headerColor: Color? = nil,
         visitorBubbleColor: Color? = nil,
-        agentBubbleColor: Color? = nil
+        agentBubbleColor: Color? = nil,
+        fontName: String? = nil,
+        branding: GiovBrandingStyle? = nil
     ) {
         self.primaryColor = primaryColor
         self.theme = theme
@@ -40,6 +46,31 @@ public struct GiovChatStyle: Sendable, Equatable {
         self.headerColor = headerColor
         self.visitorBubbleColor = visitorBubbleColor
         self.agentBubbleColor = agentBubbleColor
+        self.fontName = fontName
+        self.branding = branding
+    }
+}
+
+/// The "Powered by GiovChat" footer's look. The footer follows your style but stays on (only the workspace's
+/// `showBranding: false`, a Business and Advanced setting, removes it), so colours are used only while they stay
+/// readable: the background must be opaque; text and link colours must be opaque and at least 4.5:1 against the
+/// background, otherwise the defaults apply (text #52525B, link #7C3AED, white). Size (12 pt), layout and the 44 pt
+/// tap height are fixed.
+public struct GiovBrandingStyle: Sendable, Equatable {
+    /// A custom font (PostScript name), drawn at 12 pt.
+    public var fontName: String?
+    /// The "Powered by" text.
+    public var textColor: Color?
+    /// The "GiovChat" link colour.
+    public var brandColor: Color?
+    /// The footer's background (opaque; default white).
+    public var backgroundColor: Color?
+
+    public init(fontName: String? = nil, textColor: Color? = nil, brandColor: Color? = nil, backgroundColor: Color? = nil) {
+        self.fontName = fontName
+        self.textColor = textColor
+        self.brandColor = brandColor
+        self.backgroundColor = backgroundColor
     }
 }
 

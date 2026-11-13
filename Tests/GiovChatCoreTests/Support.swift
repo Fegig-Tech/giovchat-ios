@@ -315,6 +315,9 @@ final class FakeServer: GiovHTTP {
     var uploadDelayMs = 0
     var resumeDelayMs = 0
     var tokenLifetimeSeconds = 900
+    /// Answers for the rating and feedback routes; without one they are unknown routes (an older server).
+    var ratingResponder: ((LoggedRequest) -> (status: Int, body: [String: Any?], headers: [String: String]))?
+    var feedbackResponder: ((LoggedRequest) -> (status: Int, body: [String: Any?], headers: [String: String]))?
 
     init(clock: ManualClock) {
         self.clock = clock
@@ -386,6 +389,18 @@ final class FakeServer: GiovHTTP {
             if !uploadStatuses.isEmpty { return reply(["error": "invalid_token"], uploadStatuses.removeFirst()) }
             let name = request.upload?.file.name ?? "a.png"
             return reply(["url": "https://api.example.test/conversations/conv-1/attachments/\(name)", "filename": name])
+        }
+        if path.hasSuffix("/rating") && request.method == "POST" {
+            bump("rating")
+            guard let ratingResponder else { return reply(["error": "not_found"], 404) }
+            let answer = ratingResponder(logged)
+            return reply(answer.body, answer.status, headers: answer.headers)
+        }
+        if path.hasSuffix("/feedback") && request.method == "POST" {
+            bump("feedback")
+            guard let feedbackResponder else { return reply(["error": "not_found"], 404) }
+            let answer = feedbackResponder(logged)
+            return reply(answer.body, answer.status, headers: answer.headers)
         }
         if path.hasSuffix("/push-token") {
             bump("push-\(request.method)")

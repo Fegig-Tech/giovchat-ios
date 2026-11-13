@@ -59,6 +59,11 @@ struct GiovConversationView: View {
                     }
                 )
             }
+            if let closedBar = GiovClosedBarModel(state, strings: strings) {
+                GiovClosedBar(model: closedBar, look: look) {
+                    Task { await controller.startNewConversation() }
+                }
+            } else {
             GiovComposer(
                 text: $draft.text,
                 focused: $composerFocused,
@@ -72,6 +77,15 @@ struct GiovConversationView: View {
                 onTyping: { controller.notifyTyping() },
                 onPicked: { files in accept(files) }
             )
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { state.ratingSheetPresented },
+            set: { if !$0 { controller.dismissRating() } }
+        )) {
+            if let block = sheetBlock {
+                GiovRatingSheet(block: block, look: look, onRate: rate(requestId: block.requestId), onClose: { controller.dismissRating() })
+            }
         }
         // New replies are read out to VoiceOver users as they arrive.
         .onAppear { _ = announcer.update(state, strings: strings) }
@@ -107,7 +121,13 @@ struct GiovConversationView: View {
                                 maxWidth: maxBubble,
                                 attachmentURL: { controller.attachmentURL($0) },
                                 onRetry: { controller.retryMessage($0) },
-                                onDiscard: { controller.discardMessage($0) }
+                                onDiscard: { controller.discardMessage($0) },
+                                rating: giovShowsRatingCard(message, state: state) ? message.rating : nil,
+                                onRate: rate(requestId: message.rating?.requestId),
+                                thumbs: giovShowsThumbs(message, state: state) ? (message.id, message.feedback) : nil,
+                                onVote: { id, vote, reason in
+                                    try await controller.submitAnswerFeedback(messageId: id, vote: vote, reason: reason)
+                                }
                             )
                             .id(message.key)
                         }
@@ -145,6 +165,19 @@ struct GiovConversationView: View {
         }
     }
 
+    private func rate(requestId: String?) -> (Int, String?) async throws -> Void {
+        let chat = controller
+        return { score, comment in
+            _ = try await chat.submitRating(score: score, comment: comment, requestId: requestId)
+        }
+    }
+
+    /// The open request's card for the sheet ``GiovChatController/presentRating()`` opens.
+    private var sheetBlock: GiovRatingBlock? {
+        guard let request = state.ratingRequest else { return nil }
+        return state.messages.first { $0.id == request.messageId }?.rating
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
         if animated && !look.reduceMotion {
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
@@ -176,6 +209,38 @@ struct GiovConversationView: View {
         let checked = controller.checkFiles(picked, alreadyAttached: draft.files.count)
         draft.files.append(contentsOf: checked.accepted)
         draft.problem = giovProblemText(checked.problems, strings: look.strings)
+    }
+}
+
+/// The notice and the button that replace the composer once the team closed the conversation.
+@MainActor
+struct GiovClosedBar: View {
+    let model: GiovClosedBarModel
+    let look: GiovLook
+    let onStart: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(model.notice)
+                .font(.footnote)
+                .foregroundColor(look.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: onStart) {
+                Text(model.button)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(look.onButton)
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(look.button))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(12)
+        .background(look.composer.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Rectangle().fill(look.divider).frame(height: 0.5) }
+        .accessibilityElement(children: .contain)
     }
 }
 

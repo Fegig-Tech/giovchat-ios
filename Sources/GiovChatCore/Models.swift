@@ -223,6 +223,10 @@ public struct GiovMessage: Sendable, Equatable, Identifiable {
     public var streamId: String?
     /// A GiovBot reply still being written.
     public var isStreaming: Bool
+    /// The request to rate the conversation this message carries (a `rating` block), if any.
+    public var rating: GiovRatingBlock?
+    /// The visitor's own thumb on this GiovBot answer.
+    public var feedback: GiovAnswerVote?
 
     public init(
         id: String,
@@ -237,7 +241,9 @@ public struct GiovMessage: Sendable, Equatable, Identifiable {
         delivery: GiovDelivery = .sent,
         clientMessageId: String? = nil,
         streamId: String? = nil,
-        isStreaming: Bool = false
+        isStreaming: Bool = false,
+        rating: GiovRatingBlock? = nil,
+        feedback: GiovAnswerVote? = nil
     ) {
         self.id = id
         self.role = role
@@ -252,6 +258,8 @@ public struct GiovMessage: Sendable, Equatable, Identifiable {
         self.clientMessageId = clientMessageId
         self.streamId = streamId
         self.isStreaming = isStreaming
+        self.rating = rating
+        self.feedback = feedback
     }
 
     /// A stable list key: it is the same before and after the server stores the message and when a streamed
@@ -294,7 +302,10 @@ public struct GiovMessage: Sendable, Equatable, Identifiable {
             senderName: agent ? map.at("senderName").nonEmpty : nil,
             senderAvatar: person ? safeHTTPURL(map["senderAvatar"]) : nil,
             attachments: parseAttachments(map["attachmentId"] ?? map["attachment_id"], previews: map["attachmentPreviews"] ?? map["attachment_previews"]),
-            streamId: map.at("streamId").nonEmpty
+            streamId: map.at("streamId").nonEmpty,
+            // Only the rating block is drawn; every other block type is ignored (unknown blocks must be).
+            rating: agent ? map.at("blocks").array?.lazy.compactMap { GiovRatingBlock.fromJSON($0) }.first : nil,
+            feedback: isBot ? map.at("feedback").string.flatMap(GiovAnswerVote.init(rawValue:)) : nil
         )
     }
 }

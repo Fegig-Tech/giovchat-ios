@@ -185,30 +185,74 @@ final class CRig: TimeRig {
         await rig.dispose()
     }
 
-    @Test func aClosedOrDeletedConversationIsForgottenResume409() async {
+    @Test func aClosedConversationOnResume409IsShownReadOnlyWhenTheTokenAllows() async {
         let rig = CRig(stored: testSession)
         rig.server.resumeStatus = 409
+        rig.server.status = "closed"
+        rig.server.history = [
+            ["id": "h1", "role": "user", "content": "Hi", "createdAt": 1],
+            ["id": "h2", "role": "agent", "content": "Thanks for writing", "createdAt": 2],
+        ]
+        await rig.start()
+        await rig.open()
+        #expect(rig.ui.conversationClosed)
+        #expect(rig.ui.messages.map(\.id) == ["h1", "h2"], "the history stays visible")
+        #expect(rig.store.log.isEmpty, "the stored conversation is kept until a new one starts")
+        await rig.dispose()
+    }
+
+    @Test func aClosedConversationOnResume409DegradesWhenTheTokenIsRefused() async {
+        let rig = CRig(stored: testSession)
+        rig.server.resumeStatus = 409
+        rig.server.tokenStatuses = [403]
         await rig.start()
         #expect(rig.phase == .ready)
+        #expect(!rig.ui.conversationClosed)
+        #expect(rig.ui.error?.kind == .conversationClosed)
         #expect(rig.store.log == ["delete"])
         #expect(rig.sockets.all.isEmpty)
         await rig.dispose()
     }
 
-    @Test func aClosedConversationInHistoryIsForgottenAndTheNextMessageStartsANewOne() async {
+    @Test func aClosedConversationInHistoryStaysReadOnlyAndAMessageStartsANewOneThatClearsIt() async {
         let rig = CRig(stored: testSession)
         rig.server.status = "closed"
+        rig.server.history = [["id": "h1", "role": "user", "content": "Hi", "createdAt": 1]]
         await rig.start()
         await rig.open()
-        #expect(rig.phase == .ready)
-        #expect(rig.ui.error?.kind == .conversationClosed)
-        #expect(rig.store.log == ["delete"])
-        #expect(!rig.ui.hasConversation)
-        #expect(rig.socket.closedByClient)
-        #expect(await rig.controller.send("again"), "the next message starts a new conversation")
+        #expect(rig.phase == .active, "the socket stays up: a rating card can still arrive")
+        #expect(rig.ui.conversationClosed)
+        #expect(rig.ui.hasConversation)
+        #expect(rig.ui.messages.map(\.id) == ["h1"])
+        #expect(rig.store.log.isEmpty)
+        #expect(!rig.socket.closedByClient)
+        #expect(await rig.controller.send("again"), "writing on a closed conversation starts a new one")
         rig.server.status = "open"
+        rig.server.history = []
         await rig.pump()
+        #expect(rig.store.log.first == "delete")
         #expect(rig.server.count("created") == 1)
+        #expect(!rig.ui.conversationClosed)
+        #expect(rig.ui.messages.allSatisfy { $0.id != "h1" }, "the closed conversation is gone")
+        await rig.dispose()
+    }
+
+    @Test func startNewConversationLeavesTheClosedOneAndWaitsForTheNextMessage() async {
+        let rig = CRig(stored: testSession)
+        rig.server.status = "closed"
+        rig.server.history = [["id": "h1", "role": "user", "content": "Hi", "createdAt": 1]]
+        await rig.start()
+        await rig.open()
+        #expect(rig.ui.conversationClosed)
+        await rig.controller.startNewConversation()
+        #expect(rig.phase == .ready)
+        #expect(!rig.ui.conversationClosed && !rig.ui.hasConversation)
+        #expect(rig.ui.messages.isEmpty)
+        #expect(rig.store.log == ["delete"])
+        #expect(rig.socket.closedByClient)
+        #expect(rig.server.count("created") == 0, "nothing is created until the visitor writes")
+        await rig.controller.startNewConversation()
+        #expect(rig.store.log == ["delete"], "an open (or already left) conversation is not touched")
         await rig.dispose()
     }
 

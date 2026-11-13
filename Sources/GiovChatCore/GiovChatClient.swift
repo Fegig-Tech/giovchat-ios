@@ -57,6 +57,11 @@ struct ClientEvents {
     var error: (GiovChatError) -> Void = { _ in }
     /// A newer attachment download token arrived (with a visitor token, an upload or history).
     var attachmentAccess: (GiovAttachmentAccess) -> Void = { _ in }
+    /// A rating card was answered, changed or replaced (the `rating` frame).
+    var rating: (GiovRatingFrame) -> Void = { _ in }
+    /// The `conversation_state` frame carried `status`: true when the conversation was closed, false when it was
+    /// reopened. Not called by older servers (they send no status).
+    var conversationClosed: (Bool) -> Void = { _ in }
 }
 
 struct GiovUploadResult: Sendable, Equatable {
@@ -128,6 +133,9 @@ final class GiovChatClient {
     private var tokenRequest: (id: Int, task: Task<VisitorToken, Error>)?
     private var nextTokenRequest = 0
     private var pushUnsupported = false
+    /// The server answered a rating / feedback route with an unknown-route 404 (an older server): stop offering them.
+    private(set) var ratingsUnsupported = false
+    private(set) var feedbackUnsupported = false
 
     init(
         tenantKey: String,
@@ -510,6 +518,18 @@ final class GiovChatClient {
             events?.stream(.end(streamId: streamId))
             return
         }
+        if type == "conversation_state" {
+            switch data.at("status").string {
+            case "closed": events?.conversationClosed(true)
+            case "open": events?.conversationClosed(false)
+            default: break // unknown or absent (an older server): the history's status keeps deciding
+            }
+            return
+        }
+        if type == "rating" {
+            if let frame = GiovRatingFrame.fromJSON(data) { events?.rating(frame) }
+            return
+        }
         if type == "error" {
             serverError(data)
             return
@@ -651,6 +671,71 @@ final class GiovChatClient {
     private func sendFrame(_ frame: String) {
         guard let socket, socket.isOpen else { return }
         _ = socket.send(frame) // A failure is recovered by the next reconnect.
+    }
+
+    // MARK: - Ratings and thumbs
+
+    /// A refusal of a rating or feedback route, keeping the server's code (`rating_closed`, `too_many_changes`, ...)
+    /// so ``GiovChatError/ratingFailure`` can tell them apart; a 409 here is not "conversation closed".
+    private func ratingFailure(_ reply: Reply) -> GiovChatError {
+        let code = reply.code
+        let message = reply.body.at("message").string ?? code ?? "HTTP \(reply.status)"
+        if reply.status == 429 {
+            return GiovChatError(.rateLimited, message, status: 429, code: code ?? "rate_limited", retryAfterSeconds: reply.retryAfterSeconds)
+        }
+        if reply.status == 401 || reply.status == 403 { return .sessionExpired(message, status: reply.status, code: code) }
+        return .server(message, status: reply.status, code: code)
+    }
+
+    /// A 404 that names no request or message is a server without the route.
+    private func isUnknownRoute(_ reply: Reply) -> Bool {
+        reply.status == 404 && reply.code != "request_not_found" && reply.code != "message_not_found"
+    }
+
+    /// A call with the visitor token of the connected conversation, or of `session` (the closed conversation a
+    /// rating card came from) when there is no connection.
+    private func visitorCall(_ path: String, json: [String: JSONValue], session: GiovSession?) async throws -> Reply {
+        if currentSession != nil {
+            return try await authed("POST", try conversationPath() + path, json: json)
+        }
+        guard let session else { throw GiovChatError.disconnected() }
+        var visitor = try await fetchToken(session)
+        let url = "/conversations/\(encodeComponent(session.conversationId))" + path
+        var reply = try await request("POST", url, headers: ["Authorization": "Bearer \(visitor.token)"], json: json)
+        if reply.status == 401 {
+            visitor = try await fetchToken(session)
+            reply = try await request("POST", url, headers: ["Authorization": "Bearer \(visitor.token)"], json: json)
+        }
+        return reply
+    }
+
+    /// `POST /conversations/{id}/rating`. `requestId` nil answers the conversation's open card.
+    func submitRating(score: Int, comment: String?, requestId: String?, session: GiovSession? = nil) async throws -> GiovRatingResult {
+        if ratingsUnsupported { throw GiovChatError.server("This server has no ratings.", status: 404, code: "not_found") }
+        var body: [String: JSONValue] = ["score": .number(Double(score))]
+        if let requestId { body["requestId"] = .string(requestId) }
+        if let comment = comment?.trimmingCharacters(in: .whitespacesAndNewlines), !comment.isEmpty { body["comment"] = .string(comment) }
+        let reply = try await visitorCall("/rating", json: body, session: session)
+        guard reply.ok else {
+            if isUnknownRoute(reply) { ratingsUnsupported = true }
+            throw ratingFailure(reply)
+        }
+        guard let result = GiovRatingResult.fromJSON(reply.body, now: clock.now()) else {
+            throw GiovChatError.invalidResponse("Invalid rating response.", status: reply.status)
+        }
+        return result
+    }
+
+    /// `POST /conversations/{id}/messages/{messageId}/feedback`. `vote` nil sends `none`.
+    func submitFeedback(messageId: String, vote: GiovAnswerVote?, reason: String?) async throws {
+        if feedbackUnsupported { throw GiovChatError.server("This server has no answer feedback.", status: 404, code: "not_found") }
+        var body: [String: JSONValue] = ["value": .string(vote?.rawValue ?? "none")]
+        if vote == .down, let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty { body["reason"] = .string(reason) }
+        let reply = try await visitorCall("/messages/\(encodeComponent(messageId))/feedback", json: body, session: nil)
+        guard reply.ok else {
+            if isUnknownRoute(reply) { feedbackUnsupported = true }
+            throw ratingFailure(reply)
+        }
     }
 
     // MARK: - Uploads and push

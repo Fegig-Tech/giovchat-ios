@@ -49,7 +49,7 @@ final class ClientRig: TimeRig {
         let config = try await rig.client.fetchWidgetConfig()
         #expect(config.title == "Acme")
         #expect(config.botName == "Atlas")
-        #expect(rig.server.requests.first?.headers["X-Giov-Client"] == "ios/0.1.0")
+        #expect(rig.server.requests.first?.headers["X-Giov-Client"] == "ios/\(GiovChatVersion.current)")
         #expect(rig.server.requests.first?.url == "https://api.example.test/widget/config?tenantId=t")
         _ = try await rig.client.startConversation()
         #expect(rig.server.requests.last?.headers["X-Giov-Client"] == nil)

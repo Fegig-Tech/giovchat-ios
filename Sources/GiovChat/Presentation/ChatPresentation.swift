@@ -166,6 +166,19 @@ struct GiovBubbleModel: Sendable, Equatable {
     }
 }
 
+/// What replaces the composer once the team closed the conversation: the notice and the "Start a new conversation"
+/// button; nil while the conversation is open.
+struct GiovClosedBarModel: Sendable, Equatable {
+    var notice: String
+    var button: String
+
+    init?(_ state: GiovChatUiState, strings: GiovChatStrings) {
+        guard state.conversationClosed else { return nil }
+        notice = strings.conversationEnded
+        button = strings.startNewConversation
+    }
+}
+
 /// When the composer and its buttons work.
 enum GiovComposerRules {
     /// The visitor can write in these phases.

@@ -47,6 +47,19 @@ public final class GiovChatController {
     public var onConnectionStatusChange: ((GiovConnectionStatus) -> Void)?
     /// Replies not seen while the chat was hidden; 0 while it is visible.
     public var onUnreadCountChange: ((Int) -> Void)?
+    /// A rating request arrived (live, or found in the history), once per request: the visitor can answer it with
+    /// ``submitRating(score:comment:requestId:)``.
+    public var onRatingRequested: ((GiovRatingRequest) -> Void)?
+    /// A rating was saved by the server (from the built-in card or ``submitRating(score:comment:requestId:)``).
+    public var onRatingSubmitted: ((GiovRatingResult) -> Void)?
+    /// A thumb on a GiovBot answer was saved: the message id and the vote (`nil` when it was taken back).
+    public var onAnswerFeedback: ((String, GiovAnswerVote?) -> Void)?
+
+    /// Whether the built-in chat UI draws the rating card. Turn it off when the app draws its own from
+    /// ``GiovChatUiState/ratingRequest``.
+    public let showsRatingCard: Bool
+    /// Whether the built-in chat UI draws thumbs under GiovBot answers.
+    public let showsAnswerFeedback: Bool
 
     /// Everything the chat screen draws. A new value is published after every change.
     public private(set) var state: GiovChatUiState
@@ -116,6 +129,13 @@ public final class GiovChatController {
     private var status: GiovConnectionStatus = .disconnected
     private var conversationIdValue: String?
     private var reconnecting = false
+    /// The team closed the conversation: it stays on screen read-only (history, an open rating card) until the visitor
+    /// starts a new one.
+    private var closed = false
+    /// The stored conversation answered the resume with 409 (closed): its history is loaded read-only if the token allows.
+    private var resumedClosed = false
+    private var announcedRatings: Set<String> = []
+    private var ratingSheet = false
 
     private struct PushRequest {
         let token: String
@@ -156,6 +176,11 @@ public final class GiovChatController {
         onConversationStart: ((String) -> Void)? = nil,
         onConnectionStatusChange: ((GiovConnectionStatus) -> Void)? = nil,
         onUnreadCountChange: ((Int) -> Void)? = nil,
+        showsRatingCard: Bool = true,
+        showsAnswerFeedback: Bool = true,
+        onRatingRequested: ((GiovRatingRequest) -> Void)? = nil,
+        onRatingSubmitted: ((GiovRatingResult) -> Void)? = nil,
+        onAnswerFeedback: ((String, GiovAnswerVote?) -> Void)? = nil,
         http: any GiovHTTP = URLSessionGiovHTTP(),
         socketFactory: any GiovSocketFactory = URLSessionGiovSocketFactory(),
         clock: any GiovClock = GiovSystemClock(),
@@ -178,6 +203,11 @@ public final class GiovChatController {
         self.onConversationStart = onConversationStart
         self.onConnectionStatusChange = onConnectionStatusChange
         self.onUnreadCountChange = onUnreadCountChange
+        self.showsRatingCard = showsRatingCard
+        self.showsAnswerFeedback = showsAnswerFeedback
+        self.onRatingRequested = onRatingRequested
+        self.onRatingSubmitted = onRatingSubmitted
+        self.onAnswerFeedback = onAnswerFeedback
         self.store = sessionStore ?? GiovChatController.defaultSessionStore()
         self.baseContact = contact
         self.contact = contact ?? GiovContact()
@@ -200,6 +230,8 @@ public final class GiovChatController {
             random: random
         )
         self.outboxStop = outbox.subscribe { [weak self] in self?.changed() }
+        self.state.showsRatingCard = showsRatingCard
+        self.state.showsAnswerFeedback = showsAnswerFeedback
     }
 
     private static func defaultSessionStore() -> any GiovSessionStore {
@@ -327,6 +359,10 @@ public final class GiovChatController {
         localFiles.removeAll()
         startNow = false
         hasConversation = false
+        closed = false
+        resumedClosed = false
+        announcedRatings.removeAll()
+        ratingSheet = false
         messages = []
         drafts.removeAll()
         agentTyping = false
@@ -434,7 +470,7 @@ public final class GiovChatController {
             cancelSubscriptions()
             client.disconnect()
             let failure = error.asGiovError
-            if failure.kind == .conversationClosed {
+            if failure.kind == .conversationClosed || (resumedClosed && failure.kind != .network) {
                 await forget(generation)
                 return
             }
@@ -528,6 +564,8 @@ public final class GiovChatController {
     }
 
     private func clearSession() async {
+        closed = false
+        resumedClosed = false
         session = nil
         conversationIdValue = nil
         hasConversation = false
@@ -600,7 +638,13 @@ public final class GiovChatController {
             } catch let failure as GiovChatError {
                 guard alive(generation) else { return }
                 guard failure.kind == .sessionExpired || failure.kind == .conversationClosed || failure.status == 404 else { throw failure }
-                await clearSession()
+                if failure.kind == .conversationClosed && failure.status == 409 {
+                    // A closed conversation: keep it and load its history read-only when the token allows; otherwise
+                    // the connection below fails and the chat degrades to "conversation ended".
+                    resumedClosed = true
+                } else {
+                    await clearSession()
+                }
             }
         }
         guard alive(generation) else { return }
@@ -631,6 +675,8 @@ public final class GiovChatController {
             guard alive(generation) else { return }
             startNow = false
             session = created
+            closed = false
+            resumedClosed = false
             do {
                 try await storeOperation { [scopeKey = self.scopeKey] store in try await store.write(scope: scopeKey, session: created) }
             } catch {
@@ -665,13 +711,26 @@ public final class GiovChatController {
         }
         guard alive(generation) else { return }
         if history.closed {
-            await forget(generation)
+            // The team closed the conversation. It stays on screen read-only: the history is shown, a rating card stays
+            // interactive until its closesAt (the token and the socket keep working), and the composer gives way to
+            // "Start a new conversation".
+            closed = true
+            resumedClosed = false
+            captureAccess(history.attachmentAccess)
+            agentName = history.assignedAgentName
+            agentAvatar = history.assignedAgentAvatar
+            messages = replaceOlderRatings(mergeMessages(messages, history.messages))
+            announceRatings()
+            changed()
             return
         }
+        closed = false
+        resumedClosed = false
         captureAccess(history.attachmentAccess)
         agentName = history.assignedAgentName
         agentAvatar = history.assignedAgentAvatar
-        messages = mergeMessages(messages, history.messages)
+        messages = replaceOlderRatings(mergeMessages(messages, history.messages))
+        announceRatings()
         changed()
         client.flush()
     }
@@ -680,7 +739,8 @@ public final class GiovChatController {
         var events = ClientEvents()
         events.message = { [weak self] message in
             guard let self, self.alive(generation) else { return }
-            self.messages = mergeMessages(self.messages, [message])
+            self.messages = replaceOlderRatings(mergeMessages(self.messages, [message]))
+            self.announceRatings()
             if message.role == .agent {
                 self.agentTyping = false
                 self.agentTypingIsBot = nil
@@ -716,6 +776,30 @@ public final class GiovChatController {
                 }
                 if !content.isEmpty { self.agentTyping = false }
             }
+            self.changed()
+        }
+        events.conversationClosed = { [weak self] isClosed in
+            guard let self, self.alive(generation) else { return }
+            guard self.closed != isClosed else { return }
+            self.closed = isClosed
+            if isClosed {
+                // Read-only straight away: nothing is being written any more.
+                self.drafts.removeAll()
+                self.agentTyping = false
+                self.agentTypingIsBot = nil
+                self.error = nil
+            }
+            self.changed()
+            // A reopened chat (takeover, transfer, return to the bot) may have new messages to catch up on.
+            if !isClosed {
+                self.launch { controller in
+                    do { try await controller.refreshHistory(generation) } catch { await controller.catchUpFailed(error, generation, show: false) }
+                }
+            }
+        }
+        events.rating = { [weak self] frame in
+            guard let self, self.alive(generation) else { return }
+            self.messages = patchRating(self.messages, frame)
             self.changed()
         }
         events.attachmentAccess = { [weak self] access in
@@ -813,6 +897,7 @@ public final class GiovChatController {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !disposed, !trimmed.isEmpty || !files.isEmpty else { return false }
         guard phase == .active || phase == .connecting || phase == .ready else { return false }
+        if closed { await startNewConversation() }
         // Uploads need a live conversation; the attach button only appears once one exists.
         if !files.isEmpty && session == nil { return false }
         let generation = self.generation
@@ -1029,6 +1114,140 @@ public final class GiovChatController {
         await unregisterPushToken(giovAPNsTokenString(deviceToken))
     }
 
+    // MARK: - A closed conversation
+
+    /// Leaves the closed conversation on screen (read-only) behind: forgets it and its stored session and waits for the
+    /// visitor's next message, which starts a new conversation. The built-in "Start a new conversation" button calls
+    /// it; so does ``send(_:files:)`` on a closed conversation. Does nothing while the conversation is open.
+    public func startNewConversation() async {
+        guard !disposed, closed else { return }
+        generation += 1
+        stopTyping()
+        cancelSubscriptions()
+        client.disconnect()
+        await clearSession()
+        guard !disposed else { return }
+        startNow = false
+        agentName = nil
+        agentAvatar = nil
+        drafts.removeAll()
+        agentTyping = false
+        agentTypingIsBot = nil
+        reconnecting = false
+        ratingSheet = false
+        error = nil
+        phase = .ready
+        setStatus(.disconnected)
+        changed()
+    }
+
+    // MARK: - Ratings and answer feedback
+
+    /// The open request to rate the conversation, if any: not replaced and before its `closesAt`. `score` is set once
+    /// the visitor has answered (the answer can be changed until `closesAt`).
+    public var pendingRating: GiovRatingRequest? { openRatingRequest(messages, now: clock.now()) }
+
+    /// Rates the conversation: answers the request `requestId`, or the open one when nil. The answer shows at once and
+    /// is rolled back when the server refuses; the thrown ``GiovChatError`` tells why (see
+    /// ``GiovChatError/ratingFailure``): `rating_closed` and `request_replaced` make the card read-only or hidden.
+    /// The visitor may change the answer until `closesAt` (at most 20 times).
+    ///
+    /// - Parameters:
+    ///   - score: 1 (Very bad) to 5 (Great).
+    ///   - comment: optional, at most 1,000 characters (longer text is cut).
+    @discardableResult
+    public func submitRating(score: Int, comment: String? = nil, requestId: String? = nil) async throws -> GiovRatingResult {
+        guard !disposed else { throw GiovChatError.disconnected() }
+        guard giovRatingScores.contains(score) else {
+            throw GiovChatError.server("The score must be 1 to 5.", status: 400, code: "invalid_rating")
+        }
+        let text = comment.map { GiovRatingCardState.clampComment($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let target = requestId ?? openRatingRequest(messages, now: clock.now())?.requestId
+        let before = target.flatMap { id in messages.first { $0.rating?.requestId == id } }
+        if let before, let block = before.rating {
+            messages = patchRating(messages, GiovRatingFrame(requestId: block.requestId, messageId: before.id, closesAt: block.closesAt, score: score, comment: text?.isEmpty == false ? text : nil))
+            changed()
+        }
+        do {
+            let result = try await client.submitRating(score: score, comment: text, requestId: requestId ?? target, session: session)
+            guard !disposed else { return result }
+            messages = patchRating(messages, GiovRatingFrame(requestId: result.requestId, messageId: nil, closesAt: result.closesAt, score: result.score, comment: result.comment))
+            changed()
+            onRatingSubmitted?(result)
+            return result
+        } catch {
+            let failure = error.asGiovError
+            if !disposed, let before, let block = before.rating {
+                settleRatingFailure(failure.ratingFailure, previous: block, messageId: before.id)
+                changed()
+            }
+            throw failure
+        }
+    }
+
+    /// Takes the optimistic answer back, and makes the card read-only or hidden when the server said so.
+    private func settleRatingFailure(_ failure: GiovRatingFailure, previous: GiovRatingBlock, messageId: String) {
+        messages = messages.map { message in
+            guard message.id == messageId, var block = message.rating, block.requestId == previous.requestId else { return message }
+            block.score = previous.score
+            block.comment = previous.comment
+            switch failure {
+            case .replaced: block.replaced = true
+            case .closed, .tooManyChanges: block.closesAt = min(block.closesAt, clock.now())
+            default: break
+            }
+            var next = message
+            next.rating = block
+            return next
+        }
+    }
+
+    /// Thumbs up or down on a GiovBot answer (`vote` nil takes the vote back). Shown at once and rolled back when the
+    /// server refuses. `reason` (at most 300 characters) is kept only with a thumbs-down.
+    public func submitAnswerFeedback(messageId: String, vote: GiovAnswerVote?, reason: String? = nil) async throws {
+        guard !disposed else { throw GiovChatError.disconnected() }
+        let before = messages.first { $0.id == messageId }?.feedback
+        messages = applyFeedback(messages, id: messageId, vote: vote)
+        changed()
+        do {
+            try await client.submitFeedback(messageId: messageId, vote: vote, reason: reason.map(GiovRatingCardState.clampReason))
+            onAnswerFeedback?(messageId, vote)
+        } catch {
+            if !disposed {
+                messages = applyFeedback(messages, id: messageId, vote: before)
+                changed()
+            }
+            throw error.asGiovError
+        }
+    }
+
+    /// Shows the built-in rating sheet for the open request. False when there is none. The sheet closes itself when
+    /// the request ends; ``dismissRating()`` closes it.
+    @discardableResult
+    public func presentRating() -> Bool {
+        guard !disposed, pendingRating != nil else { return false }
+        ratingSheet = true
+        changed()
+        return true
+    }
+
+    /// Closes the rating sheet opened with ``presentRating()``.
+    public func dismissRating() {
+        guard ratingSheet else { return }
+        ratingSheet = false
+        changed()
+    }
+
+    /// Reports each open, unanswered rating request once.
+    private func announceRatings() {
+        let now = clock.now()
+        for message in messages {
+            guard let block = message.rating, block.score == nil, block.phase(at: now) == .open,
+                  announcedRatings.insert(block.requestId).inserted else { continue }
+            onRatingRequested?(GiovRatingRequest(messageId: message.id, requestId: block.requestId, closesAt: block.closesAt, url: block.url))
+        }
+    }
+
     // MARK: - Plumbing
 
     private func captureAccess(_ incoming: GiovAttachmentAccess?) {
@@ -1076,6 +1295,13 @@ public final class GiovChatController {
         next.connectionStatus = status
         next.reconnecting = reconnecting
         next.conversationId = conversationIdValue
+        next.ratingRequest = openRatingRequest(messages, now: clock.now())
+        next.ratingsAvailable = !client.ratingsUnsupported
+        next.feedbackAvailable = !client.feedbackUnsupported
+        next.showsRatingCard = showsRatingCard
+        next.showsAnswerFeedback = showsAnswerFeedback
+        next.ratingSheetPresented = ratingSheet && next.ratingRequest != nil
+        next.conversationClosed = closed
         guard next != state else { return }
         #if canImport(Combine)
         willChange.publisher.send()

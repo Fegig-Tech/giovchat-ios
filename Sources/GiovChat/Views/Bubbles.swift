@@ -196,6 +196,12 @@ struct GiovMessageBubble: View {
     let attachmentURL: (String) -> String
     let onRetry: (String) -> Void
     let onDiscard: (String) -> Void
+    /// The rating card to draw under the text; nil draws none.
+    var rating: GiovRatingBlock?
+    var onRate: ((Int, String?) async throws -> Void)?
+    /// Thumbs under a GiovBot answer: the message id, the visitor's vote and the call that sends one; nil draws none.
+    var thumbs: (messageId: String, vote: GiovAnswerVote?)?
+    var onVote: ((String, GiovAnswerVote?, String?) async throws -> Void)?
 
     var body: some View {
         let colors = look.bubble(visitor: model.isVisitor)
@@ -224,6 +230,16 @@ struct GiovMessageBubble: View {
         } below: {
             if let failure = model.failureText {
                 failureRow(failure)
+            }
+            if let rating, let onRate {
+                GiovRatingCard(block: rating, look: look, onRate: onRate)
+                    .padding(12)
+                    .frame(maxWidth: maxWidth, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(colors.fill))
+                    .padding(.top, 6)
+            }
+            if let thumbs, let onVote {
+                GiovAnswerThumbs(messageId: thumbs.messageId, vote: thumbs.vote, look: look, onVote: onVote)
             }
         }
     }

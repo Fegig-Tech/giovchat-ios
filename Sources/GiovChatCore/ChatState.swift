@@ -59,6 +59,20 @@ public struct GiovChatUiState: Sendable, Equatable {
     public var visible = true
     /// The conversation id, once started.
     public var conversationId: String?
+    /// The open request to rate the conversation (not replaced, before its `closesAt`); `score` is set once answered.
+    public var ratingRequest: GiovRatingRequest?
+    /// False once the server showed it has no rating route (an older server): hide the rating card.
+    public var ratingsAvailable = true
+    /// False once the server showed it has no answer-feedback route: hide the thumbs.
+    public var feedbackAvailable = true
+    /// The built-in chat UI draws the rating card (the host turned it off with `showsRatingCard: false` otherwise).
+    public var showsRatingCard = true
+    /// The built-in chat UI draws thumbs under GiovBot answers.
+    public var showsAnswerFeedback = true
+    /// The host asked for the rating sheet with ``GiovChatController/presentRating()``.
+    public var ratingSheetPresented = false
+    /// The team closed the conversation: it is shown read-only. ``GiovChatController/startNewConversation()`` leaves it.
+    public var conversationClosed = false
 
     public init(visible: Bool = true) {
         self.visible = visible

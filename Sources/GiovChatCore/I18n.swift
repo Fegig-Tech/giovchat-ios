@@ -81,6 +81,10 @@ public struct GiovChatStrings: Sendable {
     public var privacyPolicy: String
     /// Accessible label of the header menu button.
     public var moreOptions: String
+    /// The button that replaces the composer once the team closed the conversation.
+    public var startNewConversation: String = "Start a new conversation"
+    /// The rating card and the thumbs under GiovBot answers.
+    public var rating: GiovRatingStrings = .en
 
     /// These strings with the given ones replaced. Blank strings are ignored.
     public func withOverrides(
@@ -129,7 +133,9 @@ public struct GiovChatStrings: Sendable {
         required: (@Sendable (String) -> String)? = nil,
         startChat: String? = nil,
         privacyPolicy: String? = nil,
-        moreOptions: String? = nil
+        moreOptions: String? = nil,
+        startNewConversation: String? = nil,
+        rating: GiovRatingStrings? = nil
     ) -> GiovChatStrings {
         func keep(_ value: String?, _ fallback: String) -> String {
             guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fallback }
@@ -182,6 +188,8 @@ public struct GiovChatStrings: Sendable {
         copy.startChat = keep(startChat, self.startChat)
         copy.privacyPolicy = keep(privacyPolicy, self.privacyPolicy)
         copy.moreOptions = keep(moreOptions, self.moreOptions)
+        copy.startNewConversation = keep(startNewConversation, self.startNewConversation)
+        copy.rating = rating ?? self.rating
         return copy
     }
 
@@ -257,7 +265,9 @@ public struct GiovChatStrings: Sendable {
         required: { "\($0) *" },
         startChat: "Start chat",
         privacyPolicy: "GDPR and privacy",
-        moreOptions: "More options"
+        moreOptions: "More options",
+        startNewConversation: "Start a new conversation",
+        rating: .en
     )
 
     public static let fr = GiovChatStrings(
@@ -306,7 +316,9 @@ public struct GiovChatStrings: Sendable {
         required: { "\($0) *" },
         startChat: "Démarrer le chat",
         privacyPolicy: "RGPD et confidentialité",
-        moreOptions: "Plus d’options"
+        moreOptions: "Plus d’options",
+        startNewConversation: "Démarrer une nouvelle conversation",
+        rating: .fr
     )
 
     public static let es = GiovChatStrings(
@@ -355,7 +367,9 @@ public struct GiovChatStrings: Sendable {
         required: { "\($0) *" },
         startChat: "Iniciar chat",
         privacyPolicy: "RGPD y privacidad",
-        moreOptions: "Más opciones"
+        moreOptions: "Más opciones",
+        startNewConversation: "Iniciar una conversación nueva",
+        rating: .es
     )
 
     public static let pt = GiovChatStrings(
@@ -404,7 +418,9 @@ public struct GiovChatStrings: Sendable {
         required: { "\($0) *" },
         startChat: "Iniciar chat",
         privacyPolicy: "RGPD e privacidade",
-        moreOptions: "Mais opções"
+        moreOptions: "Mais opções",
+        startNewConversation: "Iniciar uma nova conversa",
+        rating: .pt
     )
 
     public static let de = GiovChatStrings(
@@ -453,7 +469,9 @@ public struct GiovChatStrings: Sendable {
         required: { "\($0) *" },
         startChat: "Chat starten",
         privacyPolicy: "DSGVO und Datenschutz",
-        moreOptions: "Weitere Optionen"
+        moreOptions: "Weitere Optionen",
+        startNewConversation: "Neue Unterhaltung starten",
+        rating: .de
     )
 }
 

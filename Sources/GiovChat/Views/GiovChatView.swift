@@ -44,6 +44,8 @@ public struct GiovChatView: View {
     ///   - strings: replaces interface strings, e.g. `{ $0.withOverrides(sendMessage: "Enviar") }`.
     ///   - onClose: shows a close button in the header when set.
     ///   - onError, onConversationStart, onConnectionStatusChange, onUnreadCountChange: the controller's callbacks.
+    ///   - showsRatingCard, showsAnswerFeedback: turn the built-in rating card / thumbs off when the app draws its own.
+    ///   - onRatingRequested, onRatingSubmitted, onAnswerFeedback: the controller's rating callbacks.
     public init(
         tenantKey: String,
         baseURL: String = giovDefaultBaseURL,
@@ -57,7 +59,12 @@ public struct GiovChatView: View {
         onError: ((GiovChatError) -> Void)? = nil,
         onConversationStart: ((String) -> Void)? = nil,
         onConnectionStatusChange: ((GiovConnectionStatus) -> Void)? = nil,
-        onUnreadCountChange: ((Int) -> Void)? = nil
+        onUnreadCountChange: ((Int) -> Void)? = nil,
+        showsRatingCard: Bool = true,
+        showsAnswerFeedback: Bool = true,
+        onRatingRequested: ((GiovRatingRequest) -> Void)? = nil,
+        onRatingSubmitted: ((GiovRatingResult) -> Void)? = nil,
+        onAnswerFeedback: ((String, GiovAnswerVote?) -> Void)? = nil
     ) {
         source = .owned(GiovOwnedOptions(
             tenantKey: tenantKey,
@@ -71,7 +78,12 @@ public struct GiovChatView: View {
             onError: onError,
             onConversationStart: onConversationStart,
             onConnectionStatusChange: onConnectionStatusChange,
-            onUnreadCountChange: onUnreadCountChange
+            onUnreadCountChange: onUnreadCountChange,
+            showsRatingCard: showsRatingCard,
+            showsAnswerFeedback: showsAnswerFeedback,
+            onRatingRequested: onRatingRequested,
+            onRatingSubmitted: onRatingSubmitted,
+            onAnswerFeedback: onAnswerFeedback
         ))
         self.onClose = onClose
     }
@@ -129,6 +141,11 @@ struct GiovOwnedOptions {
     var onConversationStart: ((String) -> Void)?
     var onConnectionStatusChange: ((GiovConnectionStatus) -> Void)?
     var onUnreadCountChange: ((Int) -> Void)?
+    var showsRatingCard = true
+    var showsAnswerFeedback = true
+    var onRatingRequested: ((GiovRatingRequest) -> Void)?
+    var onRatingSubmitted: ((GiovRatingResult) -> Void)?
+    var onAnswerFeedback: ((String, GiovAnswerVote?) -> Void)?
 
     /// Changes when a new controller is needed.
     var identity: String {
@@ -159,7 +176,12 @@ final class GiovControllerHolder: ObservableObject {
             onError: options.onError,
             onConversationStart: options.onConversationStart,
             onConnectionStatusChange: options.onConnectionStatusChange,
-            onUnreadCountChange: options.onUnreadCountChange
+            onUnreadCountChange: options.onUnreadCountChange,
+            showsRatingCard: options.showsRatingCard,
+            showsAnswerFeedback: options.showsAnswerFeedback,
+            onRatingRequested: options.onRatingRequested,
+            onRatingSubmitted: options.onRatingSubmitted,
+            onAnswerFeedback: options.onAnswerFeedback
         )
     }
 
@@ -257,7 +279,7 @@ struct GiovChatScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if state.config?.showBranding != false {
-                GiovBrandingView()
+                GiovBrandingView(showBranding: true)
             }
         }
         .background(look.background.ignoresSafeArea())

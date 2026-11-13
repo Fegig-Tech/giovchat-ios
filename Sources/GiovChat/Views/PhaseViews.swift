@@ -64,30 +64,6 @@ struct GiovErrorView: View {
     }
 }
 
-/// "Powered by GiovChat". Deliberately isolated from the style overrides, as in the other SDKs.
-@MainActor
-struct GiovBrandingView: View {
-    @Environment(\.openURL) private var openURL
-
-    init() {}
-
-    var body: some View {
-        Button {
-            openURL(giovBrandingURL)
-        } label: {
-            (Text(verbatim: "Powered by ") + Text(verbatim: "GiovChat").bold().foregroundColor(Color(GiovRGB(rgb: 0x7C3AED))))
-                .font(.caption)
-                .foregroundColor(Color(GiovRGB(rgb: 0x52525B)))
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text(verbatim: "Powered by GiovChat"))
-        .background(Color.white.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) { Rectangle().fill(Color(GiovRGB(rgb: 0xEBEBEB))).frame(height: 0.5) }
-    }
-}
-
 /// The pre-chat form: only the contact fields the workspace requires and the host has not supplied. The button
 /// stays disabled until every required field is valid.
 @MainActor
